@@ -1,0 +1,102 @@
+name: Reusable Terraform Workflow
+
+on:
+    workflow_call:
+        inputs:
+            terraform_action:
+                required: true
+                type: string
+                description: "Terraform action to run: plan or apply"
+            working_directory:
+                required: true
+                type: string
+                description: "Terraform directory to run from"
+            environment_name:
+                required: true
+                type: string
+                description: "Environment name (sandbox, staging, prod)"
+            terraform_version:
+                required: false
+                type: string
+                default: "1.6.0"
+                description: "Terraform version to use"
+        outputs:
+            plan_summary:
+                description: "Summary of terraform plan"
+                value: ${{ jobs.terraform.outputs.plan_summary }}
+
+permissions:
+    contents: read
+    pull-requests: write
+
+jobs:
+    terraform:
+        name: Terraform ${{ inputs.terraform_action }} - ${{ inputs.environment_name }}
+        runs-on: ubuntu-latest
+        outputs:
+            plan_summary: ${{ steps.plan.outputs.summary }}
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Setup Terraform
+              uses: hashicorp/setup-terraform@v2
+              with:
+                  terraform_version: ${{ inputs.terraform_version }}
+
+            - name: Azure Login
+              uses: azure/login@v1
+              with:
+                  creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+            - name: Terraform Init
+              working-directory: ${{ inputs.working_directory }}
+              run: |
+                  terraform init
+
+            - name: Terraform Plan
+              id: plan
+              working-directory: ${{ inputs.working_directory }}
+              run: |
+                  terraform plan \
+                    -var-file=${{ inputs.environment_name }}.tfvars \
+                    -no-color \
+                    -out=tfplan.bin \
+                    2>&1 | tee plan.txt
+
+                  if grep -q "will be added" plan.txt; then
+                    count_add=$(grep -o "will be added" plan.txt | wc -l)
+                  else
+                    count_add=0
+                  fi
+
+                  if grep -q "will be changed" plan.txt; then
+                    count_change=$(grep -o "will be changed" plan.txt | wc -l)
+                  else
+                    count_change=0
+                  fi
+
+                  if grep -q "will be destroyed" plan.txt; then
+                    count_destroy=$(grep -o "will be destroyed" plan.txt | wc -l)
+                  else
+                    count_destroy=0
+                  fi
+
+                  echo "summary=Add: $count_add, Change: $count_change, Destroy: $count_destroy" >> $GITHUB_OUTPUT
+              continue-on-error: true
+
+            - name: Terraform Apply
+              if: inputs.terraform_action == 'apply'
+              working-directory: ${{ inputs.working_directory }}
+              run: |
+                  terraform apply -no-color -auto-approve tfplan.bin
+
+            - name: Upload Artifacts
+              if: always()
+              uses: actions/upload-artifact@v3
+              with:
+                  name: ${{ inputs.environment_name }}-terraform
+                  path: |
+                      ${{ inputs.working_directory }}/plan.txt
+                      ${{ inputs.working_directory }}/tfplan.bin
+                  retention-days: 5

@@ -1,0 +1,124 @@
+name: Apply
+
+on:
+    push:
+        branches:
+            - main
+            - develop
+        paths:
+            - "infra/**"
+            - "bootstrap/**"
+            - ".github/workflows/apply.yml"
+
+concurrency:
+    group: apply-sandbox
+    cancel-in-progress: false
+
+permissions:
+    contents: read
+
+jobs:
+    plan:
+        name: Plan Sandbox
+        runs-on: ubuntu-latest
+        outputs:
+            plan_exists: ${{ steps.check_plan.outputs.plan_exists }}
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Setup Terraform
+              uses: hashicorp/setup-terraform@v2
+              with:
+                  terraform_version: 1.6.0
+
+            - name: Azure Login
+              uses: azure/login@v1
+              with:
+                  creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+            - name: Terraform Init
+              run: |
+                  cd infra/environments/sandbox
+                  terraform init
+
+            - name: Terraform Plan
+              id: plan
+              run: |
+                  cd infra/environments/sandbox
+                  terraform plan \
+                    -var-file=sandbox.tfvars \
+                    -no-color \
+                    -out=tfplan.bin \
+                    2>&1 | tee plan.txt
+              continue-on-error: true
+
+            - name: Check Plan Status
+              id: check_plan
+              run: |
+                  if [ -f infra/environments/sandbox/tfplan.bin ]; then
+                    echo "plan_exists=true" >> $GITHUB_OUTPUT
+                  else
+                    echo "plan_exists=false" >> $GITHUB_OUTPUT
+                  fi
+
+            - name: Upload Plan Artifact
+              if: steps.check_plan.outputs.plan_exists == 'true'
+              uses: actions/upload-artifact@v3
+              with:
+                  name: apply-tfplan
+                  path: infra/environments/sandbox/tfplan.bin
+                  retention-days: 1
+
+    apply:
+        name: Apply Sandbox
+        needs: plan
+        runs-on: ubuntu-latest
+        environment: sandbox
+        if: needs.plan.outputs.plan_exists == 'true'
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Setup Terraform
+              uses: hashicorp/setup-terraform@v2
+              with:
+                  terraform_version: 1.6.0
+
+            - name: Azure Login
+              uses: azure/login@v1
+              with:
+                  creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+            - name: Download Plan Artifact
+              uses: actions/download-artifact@v3
+              with:
+                  name: apply-tfplan
+                  path: infra/environments/sandbox/
+
+            - name: Terraform Init
+              run: |
+                  cd infra/environments/sandbox
+                  terraform init
+
+            - name: Terraform Apply
+              run: |
+                  cd infra/environments/sandbox
+                  terraform apply -no-color -auto-approve tfplan.bin
+              env:
+                  TF_LOG: info
+
+            - name: Post Apply Summary
+              if: always()
+              uses: actions/github-script@v7
+              with:
+                  github-token: ${{ secrets.GITHUB_TOKEN }}
+                  script: |
+                      github.rest.repos.createCommitStatus({
+                        owner: context.repo.owner,
+                        repo: context.repo.repo,
+                        sha: context.sha,
+                        state: 'success',
+                        description: 'Terraform apply completed for sandbox',
+                        context: 'terraform/apply'
+                      });

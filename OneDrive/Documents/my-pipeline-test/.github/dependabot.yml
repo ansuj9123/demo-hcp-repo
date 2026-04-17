@@ -1,0 +1,24 @@
+version: 2
+updates:
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    allow:
+      - dependency-type: "all"
+
+  # Terraform
+  - package-ecosystem: "terraform"
+    directory: "/bootstrap"
+    schedule:
+      interval: "weekly"
+    allow:
+      - dependency-type: "all"
+
+  - package-ecosystem: "terraform"
+    directory: "/infra/environments/sandbox"
+    schedule:
+      interval: "weekly"
+    allow:
+      - dependency-type: "all"
