@@ -1,0 +1,477 @@
+Perfect. Since you're learning the full end-to-end process, I would recommend starting clean and recreating everything using the Azure Portal and GitHub Actions OIDC.
+
+
+
+Current Project Structure
+
+
+
+Based on what you've shared, you'll need something like:
+
+
+
+nodejs-demo/
+
+│
+
+├── app.js
+
+├── package.json
+
+├── Dockerfile
+
+├── .dockerignore
+
+└── .github
+
+    └── workflows
+
+        └── docker-build.yml
+
+
+
+Your app.js looks fine and will work as-is.
+
+
+
+Phase 1 - Create Azure Container Registry (Portal)
+
+
+
+In the Azure Portal:
+
+
+
+Create Resource
+
+    └── Container Registry
+
+
+
+Fill in:
+
+
+
+Subscription:
+
+<your subscription>
+
+
+
+Resource Group:
+
+rg-nodejs-demo
+
+
+
+Registry Name:
+
+ansujacr001
+
+
+
+The registry name must be globally unique.
+
+
+
+SKU:
+
+Basic
+
+
+
+Click:
+
+
+
+Review + Create
+
+
+
+After deployment completes:
+
+
+
+Container Registries
+
+   └── ansujacr001
+
+
+
+Copy:
+
+
+
+Login Server
+
+
+
+ansujacr001.azurecr.io
+
+Phase 2 - Create Azure Container App Environment
+
+
+
+Create:
+
+
+
+Container App Environment
+
+
+
+Example:
+
+
+
+Name:
+
+nodejs-env
+
+
+
+Region:
+
+UK South
+
+
+
+Resource Group:
+
+rg-nodejs-demo
+
+Phase 3 - Create Azure Container App
+
+
+
+Create:
+
+
+
+Container App
+
+
+
+For now you can use any temporary image from ACR.
+
+
+
+Example:
+
+
+
+Name:
+
+nodejs-app
+
+
+
+Container App Environment:
+
+nodejs-env
+
+
+
+Ingress:
+
+External
+
+
+
+Target Port:
+
+3000
+
+
+
+We'll update the image automatically from GitHub Actions later.
+
+
+
+Phase 4 - Configure GitHub Secrets
+
+
+
+Repository:
+
+
+
+Settings
+
+   └── Secrets and Variables
+
+          └── Actions
+
+
+
+Create:
+
+
+
+AZURE_CLIENT_ID
+
+AZURE_TENANT_ID
+
+AZURE_SUBSCRIPTION_ID
+
+ACR_NAME
+
+RESOURCE_GROUP
+
+CONTAINER_APP_NAME
+
+
+
+Example:
+
+
+
+AZURE_CLIENT_ID=xxxxxxxx
+
+AZURE_TENANT_ID=xxxxxxxx
+
+AZURE_SUBSCRIPTION_ID=xxxxxxxx
+
+
+
+ACR_NAME=ansujacr001
+
+
+
+RESOURCE_GROUP=rg-nodejs-demo
+
+
+
+CONTAINER_APP_NAME=nodejs-app
+
+Phase 5 - GitHub Actions Pipeline
+
+
+
+Create:
+
+
+
+.github/workflows/docker-build.yml
+
+
+
+Paste:
+
+
+
+name: Build and Deploy NodeJS
+
+
+
+on:
+
+  push:
+
+    branches:
+
+      - main
+
+
+
+permissions:
+
+  id-token: write
+
+  contents: read
+
+
+
+env:
+
+  IMAGE_NAME: nodejs-demo
+
+
+
+jobs:
+
+  build:
+
+
+
+    runs-on: ubuntu-latest
+
+
+
+    steps:
+
+
+
+      - name: Checkout Source
+
+        uses: actions/checkout@v4
+
+
+
+      - name: Azure Login (OIDC)
+
+        uses: azure/login@v2
+
+        with:
+
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+
+
+      - name: Login to Azure Container Registry
+
+        run: |
+
+          az acr login --name ${{ secrets.ACR_NAME }}
+
+
+
+      - name: Build Docker Image
+
+        run: |
+
+          docker build \
+
+          -t ${{ secrets.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.run_number }} \
+
+          -t ${{ secrets.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest .
+
+
+
+      - name: Push Docker Image
+
+        run: |
+
+          docker push ${{ secrets.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.run_number }}
+
+          docker push ${{ secrets.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest
+
+
+
+      - name: Update Azure Container App
+
+        run: |
+
+          az containerapp update \
+
+            --name ${{ secrets.CONTAINER_APP_NAME }} \
+
+            --resource-group ${{ secrets.RESOURCE_GROUP }} \
+
+            --image ${{ secrets.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest
+
+Phase 6 - Commit Everything
+
+git add .
+
+git commit -m "Add GitHub Actions OIDC pipeline"
+
+git push origin main
+
+Expected Result
+
+
+
+Every time you push code:
+
+
+
+GitHub Push
+
+      │
+
+      ▼
+
+GitHub Actions
+
+      │
+
+      ▼
+
+OIDC Login to Azure
+
+      │
+
+      ▼
+
+Build Docker Image
+
+      │
+
+      ▼
+
+Push to ACR
+
+      │
+
+      ▼
+
+Update Container App
+
+      │
+
+      ▼
+
+Application Available
+
+One More File You'll Need
+
+
+
+I don't see a package.json in the files you've listed. Your Docker build will fail without it because your Node.js app depends on Express.
+
+
+
+Create a package.json like this:
+
+
+
+{
+
+  "name": "nodejs-demo",
+
+  "version": "1.0.0",
+
+  "main": "app.js",
+
+  "scripts": {
+
+    "start": "node app.js"
+
+  },
+
+  "dependencies": {
+
+    "express": "^4.21.2"
+
+  }
+
+}
+
+
+
+Then run:
+
+
+
+npm install
+
+
+
+which creates:
+
+
+
+package-lock.json
+
+
+
+Commit both files before running the GitHub Actions pipeline. Otherwise the Docker image build will fail during dependency installation.
+
+
+
+I am creating the above, and I am at phase 3, do i have to first create container app environment
