@@ -1,12 +1,7 @@
 name: Build and Deploy NodeJS
 
 on:
-
   push:
-
-    branches:
-
-      - main
 
 
 
